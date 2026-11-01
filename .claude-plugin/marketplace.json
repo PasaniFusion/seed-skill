@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "seed-skill",
+  "description": "The Seed skill pack for Claude: raise money for your startup",
+  "owner": {
+    "name": "Jake Schincariol",
+    "url": "https://opusjake.ai"
+  },
+  "plugins": [
+    {
+      "name": "seed-skill",
+      "description": "Eleven Claude skills for raising a seed round: a competitor scout, an investor finder, a business planner, a pitch deck designer, a closer that drafts outreach and books investor calls (nothing sends without your yes), a market sizer, a financial modeler, a pitch coach, a term sheet reader, a data room builder and investor updates.",
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/Jakeschincariol/seed-skill"
+    }
+  ]
+}

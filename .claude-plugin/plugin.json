@@ -1,0 +1,22 @@
+{
+  "name": "seed-skill",
+  "description": "11 Claude skills that take your startup from idea to funded: competitor research, investor matching, a business plan, a pitch deck and a closer that books your investor calls.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Jake Schincariol",
+    "url": "https://opusjake.ai"
+  },
+  "homepage": "https://github.com/Jakeschincariol/seed-skill",
+  "repository": "https://github.com/Jakeschincariol/seed-skill",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "claude-skills",
+    "startups",
+    "fundraising",
+    "venture-capital",
+    "pitch-deck",
+    "investor-outreach"
+  ],
+  "skills": "./"
+}
