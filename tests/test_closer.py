@@ -322,6 +322,103 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.c("log", "--id", "marcus-lee", "--event", "denied", today="2026-10-26")[0], 0)
         self.assertEqual(self.pipe()["marcus-lee"]["status"], "drafted")
 
+    def test_draft_only_gmail_drafts_then_the_user_sends(self):
+        self.c("draft", today="2026-10-26")
+        code, text, _ = self.c("batch", today="2026-10-26")
+        self.assertIn("as drafts in your Gmail", text)
+        self.assertNotIn("Send these", text)
+        b = self.batch_id("2026-10-26")
+        code, text, _ = self.c("approve", "--batch", b, "--reply", "yes", today="2026-10-26")
+        self.assertEqual(code, 0)
+        self.assertIn("create_draft", text)
+        self.assertIn("Never send_message, never reply", text)
+        # a draft needs the yes and the id create_draft returned
+        self.c("log", "--id", "maya-chen", "--event", "denied", today="2026-10-26")
+        code, _, err = self.c("log", "--id", "maya-chen", "--event", "gmail-draft", "--gmail-draft-id", "r-1",
+                              today="2026-10-26")
+        self.assertEqual(code, 1)
+        self.assertIn("the yes comes first", err)
+        code, _, err = self.c("log", "--id", "daniel-okafor", "--event", "gmail-draft", today="2026-10-26")
+        self.assertEqual(code, 1)
+        self.assertIn("--gmail-draft-id", err)
+        code, text, _ = self.c("log", "--id", "daniel-okafor", "--event", "gmail-draft", "--gmail-draft-id",
+                               "r-42", "--thread-id", "t-42", today="2026-10-26")
+        self.assertEqual(code, 0)
+        self.assertIn("saved in Gmail Drafts (r-42)", text)
+        # outbox --json lists only what is not in Gmail Drafts yet, so nothing is drafted twice
+        rows = json.loads(self.c("outbox", "--json")[1])
+        self.assertEqual(len(rows), 4)
+        self.assertNotIn("daniel-okafor", [r["id"] for r in rows])
+        code, text, _ = self.c("outbox")
+        self.assertIn("1 in Gmail Drafts, waiting for the user to send", text)
+        p = self.pipe()["daniel-okafor"]
+        self.assertEqual((p["status"], p["draft"]["gmail_draft_id"]), ("approved", "r-42"))
+        code, text, _ = self.c("status", today="2026-10-26")
+        self.assertIn("(1 in Gmail Drafts)", text)
+        # the user sent it from Gmail a day later: the thread id comes from the draft
+        code, text, _ = self.c("log", "--id", "daniel-okafor", "--event", "sent", "--date", "2026-10-27",
+                               today="2026-10-28")
+        self.assertEqual(code, 0, text)
+        p = self.pipe()["daniel-okafor"]
+        self.assertEqual((p["status"], p["thread_id"], p["draft"]), ("sent", "t-42", None))
+        self.assertEqual(p["touches"][-1]["date"], "2026-10-27")
+        self.assertEqual(p["touches"][-1]["gmail_draft_id"], "r-42")
+        # a Gmail draft the user deleted goes back to drafted and loses its draft id
+        self.c("log", "--id", "elena-brooks", "--event", "gmail-draft", "--gmail-draft-id", "r-7",
+               today="2026-10-26")
+        code, text, _ = self.c("log", "--id", "elena-brooks", "--event", "denied", today="2026-10-26")
+        self.assertIn("Delete Gmail draft r-7", text)
+        d = self.pipe()["elena-brooks"]["draft"]
+        self.assertEqual(d["state"], "drafted")
+        self.assertNotIn("gmail_draft_id", d)
+
+    def test_booking_link_instead_of_times_and_a_video_link(self):
+        self.c("draft", today="2026-10-26")
+        self.send_all("2026-10-26")
+        self.assertEqual(self.c("log", "--id", "maya-chen", "--event", "interested", today="2026-10-28")[0], 0)
+        # no booking link yet: --booking refuses and inbox still suggests times
+        code, _, err = self.c("reply", "--id", "maya-chen", "--booking", today="2026-10-28")
+        self.assertEqual(code, 1)
+        self.assertIn("founder.booking_link", err)
+        cfg_path = os.path.join(self.d, "config.json")
+        with open(cfg_path) as fh:
+            cfg = json.load(fh)
+        cfg["founder"]["booking_link"] = "calendly.com/casey-morgan/45min"
+        with open(cfg_path, "w") as fh:
+            json.dump(cfg, fh)
+        code, _, err = self.c("reply", "--id", "maya-chen", "--booking", today="2026-10-28")
+        self.assertEqual(code, 1)
+        self.assertIn("full https://", err)
+        link = "https://calendly.com/casey-morgan/45min"
+        cfg["founder"]["booking_link"] = link
+        with open(cfg_path, "w") as fh:
+            json.dump(cfg, fh)
+        # inbox now points at the link, not at offering times
+        code, text, _ = self.c("inbox", "--text", "Sounds great, happy to chat. Send me a time.", "--from",
+                               "maya@northlight.example", "--json", today="2026-10-28")
+        nxt = json.loads(text)[0]["next"]
+        self.assertIn("reply --id maya-chen --booking", nxt)
+        self.assertIn(link, nxt)
+        self.assertNotIn("Offer two times", nxt)
+        code, text, _ = self.c("reply", "--id", "maya-chen", "--booking", today="2026-10-28")
+        self.assertEqual(code, 0, text)
+        self.assertIn("Thanks, great to hear.", text)
+        self.assertIn(link, text)
+        self.assertNotIn("meet.google.com", text)
+        p = self.pipe()["maya-chen"]
+        self.assertEqual(p["draft"]["kind"], "reply")
+        with open(os.path.join(self.d, p["draft"]["file"]), "rb") as fh:
+            self.assertIn(link.encode(), fh.read())
+        # Calendly sent the invite: book records the call and drafts nothing
+        code, text, _ = self.c("book", "--id", "maya-chen", "--start", "2026-11-05 10:00", "--tz", "Europe/London",
+                               "--minutes", "45", "--link", "https://zoom.us/j/123456789", "--already-invited",
+                               today="2026-10-28")
+        self.assertEqual(code, 0, text)
+        self.assertIn("already sent Maya Chen the invite", text)
+        self.assertNotIn("Save this invite", text)
+        call = self.pipe()["maya-chen"]["call"]
+        self.assertEqual((call["minutes"], call["link"]), (45, "https://zoom.us/j/123456789"))
+
     def test_the_daily_cap(self):
         cfg_path = os.path.join(self.d, "config.json")
         with open(cfg_path) as fh:

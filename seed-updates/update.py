@@ -492,7 +492,8 @@ def cmd_write(a):
     for w in warnings:
         print("Note: %s" % w, file=sys.stderr if a.stdout else sys.stdout)
     if not a.stdout:
-        print("Nothing was sent. Read it with the founder, then send it from their own Gmail after a yes.")
+        print("Nothing was sent. Read it with the founder; after a yes, save it as Gmail drafts (create_draft, "
+              "never a send tool) for the founder to send.")
     return 0
 
 

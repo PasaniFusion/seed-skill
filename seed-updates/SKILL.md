@@ -87,10 +87,11 @@ that arrived that month, which is not burn), `add --net-burn N` (override),
    seed/pipeline.json, status passed with a "not now" reply), run `write
    --to prospects`. Never send it to anyone who said no, opted out or
    bounced.
-5. Sending: show the founder the recipients and the full email, and wait for
-   a clear yes for that batch. Then send it through the founder's own Gmail
-   connector (or save Gmail drafts if they prefer). Fill in {first_name} for
-   each prospect. Nothing goes out on its own.
+5. Drafting, never sending: show the founder the recipients and the full
+   email, and wait for a clear yes for that batch. Then save one Gmail draft
+   per recipient in the founder's own Gmail (`create_draft`, never
+   `send_message` or `reply`), with {first_name} filled in. The founder reads
+   each draft and presses send in Gmail. Nothing goes out on its own.
 6. Hand off: `/seed-closer` logs any reply and books a call; `/seed-model`
    updates the assumptions when real numbers drift from the plan.
 

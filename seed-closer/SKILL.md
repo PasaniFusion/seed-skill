@@ -1,14 +1,15 @@
 ---
 name: seed-closer
 description: >-
-  The Closer. Sends personalised outreach emails to investors, manages the
-  conversations and keeps following up until an investor call is booked,
-  and nothing leaves the user's inbox without their yes. Drafts one RFC 5322
+  The Closer. Drafts personalised outreach emails to investors, manages the
+  conversations and keeps following up until an investor call is booked.
+  Draft-only: Claude never sends an email or an invite; the user reads every
+  one in their own Gmail Drafts and presses send. Drafts one RFC 5322
   .eml per investor from seed/investors.json and a template (a real personal
   line, the sender's real name and an opt-out line, generic lines refused),
   shows the batch, records the user's yes word for word, enforces a daily cap
-  of 20, then Claude sends through the user's own Gmail connector where the
-  Allow once card is a second check. Schedules follow-ups on +3 and +7
+  of 20, then Claude saves each email with the Gmail connector's create_draft
+  (never a send or reply tool). Schedules follow-ups on +3 and +7
   business days (3 touches at most, never after a reply), sorts replies into
   interested / question / not now / no / out of office, stops a thread for
   good on a no, an opt-out or a bounce, writes a valid .ics invite and shows
@@ -26,10 +27,11 @@ argument-hint: "[draft | batch | due | inbox | book | status]"
 The Closer does the part of a raise that eats the founder's week: one
 personal email per investor, the follow-ups nobody remembers to send, the
 replies sorted, and the call on the calendar. It writes everything; it never
-sends anything. Claude sends through the user's own Gmail, only after the
-user said yes to that exact batch in the chat, and Claude's own "Allow once"
-card asks again for every email. All the user has to do is say yes, show up
-and pitch. Investors decide; nothing here promises a check.
+sends anything, and neither does Claude. After the user said yes to that
+exact batch in the chat, Claude saves each email as a draft in the user's own
+Gmail. The user reads every draft there, edits it if they like, and presses
+send themselves. All the user has to do is say yes, send, show up and pitch.
+Investors decide; nothing here promises a check.
 
 `${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
 
@@ -37,12 +39,14 @@ and pitch. Investors decide; nothing here promises a check.
 python3 "${CLAUDE_SKILL_DIR}/closer.py" draft --top 20          # one .eml per investor, status drafted
 python3 "${CLAUDE_SKILL_DIR}/closer.py" batch                   # recipients, their personal lines, the first email in full
 python3 "${CLAUDE_SKILL_DIR}/closer.py" approve --batch 3f9a1c2e --reply "yes"   # the user's reply, word for word
-python3 "${CLAUDE_SKILL_DIR}/closer.py" outbox --json           # exactly what to send: to, subject, body, thread
-python3 "${CLAUDE_SKILL_DIR}/closer.py" log --id maya-chen --event sent --thread-id 18c2f0a1
+python3 "${CLAUDE_SKILL_DIR}/closer.py" outbox --json           # what still goes into Gmail Drafts: to, subject, body, thread
+python3 "${CLAUDE_SKILL_DIR}/closer.py" log --id maya-chen --event gmail-draft --gmail-draft-id r-123 --thread-id 18c2f0a1
+python3 "${CLAUDE_SKILL_DIR}/closer.py" log --id maya-chen --event sent --date 2026-10-27   # once the user sent it from Gmail
 python3 "${CLAUDE_SKILL_DIR}/closer.py" due --today 2026-10-29  # who gets a follow-up today
 python3 "${CLAUDE_SKILL_DIR}/closer.py" followup --due --extra "Here's our 60-second demo: https://..."
 python3 "${CLAUDE_SKILL_DIR}/closer.py" inbox --file replies.json            # sort replies, then --write
 python3 "${CLAUDE_SKILL_DIR}/closer.py" reply --id maya-chen --body-file answer.txt
+python3 "${CLAUDE_SKILL_DIR}/closer.py" reply --id maya-chen --booking   # interested: the reply ends with founder.booking_link
 python3 "${CLAUDE_SKILL_DIR}/closer.py" book --id maya-chen --start "2026-11-05 10:00" --tz America/New_York --link https://meet.google.com/abc-defg-hij
 python3 "${CLAUDE_SKILL_DIR}/closer.py" status                  # the funnel
 ```
@@ -54,11 +58,11 @@ the date). `--json` on batch, outbox, due, inbox and status.
 
 | file | what |
 | --- | --- |
-| `seed/config.json` | `startup` (name, one_liner, optional tagline, raise, stage), `founder` (your real name, the address you send from, company_address), `outreach` (daily_cap 20, followup_days [3, 7], max_touches 3, business_days true, optional holidays) |
+| `seed/config.json` | `startup` (name, one_liner, optional tagline, raise, stage), `founder` (your real name, the address you send from, company_address, optional booking_link: your own booking page such as `https://calendly.com/your-name/45min`), `outreach` (daily_cap 20, followup_days [3, 7], max_touches 3, business_days true, optional holidays) |
 | `seed/investors.json` | from /seed-investors: id, name, firm, email, sources, fit, reasons, personal_line |
 | `template.txt` | the intro and the two follow-ups (this folder; copy it to `seed/template.txt` to make your own) |
 | `seed/outreach/<id>-<n>.eml` | each draft: a valid RFC 5322 message (CRLF, From, To, Subject, Date, Message-ID, plain text); follow-ups carry In-Reply-To |
-| `seed/pipeline.json` | one row per investor: status, touches, next_due, labels, notes, the waiting draft, the Gmail thread id, the call, the history |
+| `seed/pipeline.json` | one row per investor: status, touches, next_due, labels, notes, the waiting draft (and its Gmail draft id once it is in Gmail Drafts), the Gmail thread id, the call, the history |
 | `seed/calls/<id>.ics` | the invite: RFC 5545, CRLF, folded at 75 octets, UTC times, UID, SEQUENCE, ORGANIZER, ATTENDEE, the video link |
 
 ## The rules it enforces
@@ -94,36 +98,50 @@ the date). `--json` on batch, outbox, due, inbox and status.
   already drafted is voided and drafted again then.
 
 Statuses: drafted, approved, sent, replied, interested, booked, and the ends
-passed, bounced, optout.
+passed, bounced, optout. An approved email sits in the user's Gmail Drafts
+until the user sends it; only then is it logged as sent.
 
-## Sending: the Gmail-connector loop
+## Draft-only: the Gmail-connector loop
 
-The user connects their own Gmail in Claude (Customize > Connectors) and sets
-the tools that send or draft to **Needs approval**, never Always allow. In
-Claude Code, keep them on ask in `.claude/settings.json` and never in allow.
-In the Claude Gmail connector checked on 2026-10-26 the tools are
-`send_message` (send), `create_draft` (leave it in Drafts), `reply` (answer
-inside a thread), `search_threads` and `get_thread` (read only); another
-Gmail connector may name them differently. Nothing goes out any other way: no
-mail-merge tool, no SMTP, no third-party sender.
+Claude never sends. The only Gmail tool that writes is `create_draft`, and the
+only person who presses send is the user, in Gmail. In the Claude Gmail
+connector checked on 2026-11-11 the tools are `create_draft` (leave it in
+Drafts; `replyToMessageId` keeps it in a thread; it takes attachments),
+`search_threads` and `get_thread` (read only), and `send_message` and `reply`,
+which send at once: **never call `send_message` or `reply`**, whatever the
+user's yes said. Another Gmail connector may name them differently; use only
+its draft tool. Keep the send tools on **Needs approval** (in Claude Code, on
+ask, never in allow) so a slip still stops at a card. Nothing goes out any
+other way: no mail-merge tool, no SMTP, no third-party sender.
 
 1. `closer.py batch`. Show the user what it prints, as it prints it: every
    recipient with their personal line, the first email in full, the count
-   against the daily cap. Ask: "Send these N emails from your Gmail? Reply yes
-   or no." One batch per question.
+   against the daily cap. Ask: "Save these N emails as drafts in your Gmail?
+   Nothing is sent: you read each one and press send yourself. Reply yes or
+   no." One batch per question.
 2. `closer.py approve --batch <id> --reply "<their reply, word for word>"`.
    "Not recorded" means it was not a clear yes: ask again, never turn a reply
-   into a yes yourself. To send fewer, show a smaller batch (`--ids`, `--limit`).
-3. Only after "Recorded your yes", send each email from the JSON it printed,
-   one tool call per email: `send_message` with that to, subject and body (or
-   `create_draft` if the user would rather press send in Gmail). A follow-up or
-   a reply goes in its thread with `reply` and the `thread_id`. Each call
-   raises Claude's "Allow once / Deny" card: the second check.
-4. After each send: `closer.py log --id <id> --event sent --thread-id <id from
-   Gmail>`. Denied on the card: `log --id <id> --event denied` (back to
-   drafted, it needs a new yes). Stop the loop if anything looks wrong.
-5. Never from a scheduled or background task. A schedule may run `due`,
-   `followup --due` and read replies; sending always waits for the user.
+   into a yes yourself. To draft fewer, show a smaller batch (`--ids`, `--limit`).
+3. Only after "Recorded your yes", save each email from the JSON it printed
+   as a Gmail draft, one tool call per email: `create_draft` with that to,
+   subject and body (plain text, no Markdown). A follow-up or a reply is
+   drafted inside its thread: `get_thread` on the `thread_id`, then
+   `create_draft` with `replyToMessageId` set to that thread's last message.
+4. After each draft: `closer.py log --id <id> --event gmail-draft
+   --gmail-draft-id <the draft id> --thread-id <its threadId>`. `outbox
+   --json` then leaves it out, so nothing is drafted twice. Stop the loop if
+   anything looks wrong.
+5. Tell the user the drafts are waiting in Gmail Drafts (link the `viewUrl`s)
+   and that they send them, edited or not. When one shows up in Gmail's Sent
+   (`search_threads` with `in:sent to:<their address>`, or `get_thread` on its
+   thread), `closer.py log --id <id> --event sent --date <the day it went>`;
+   the follow-ups count from that day. A draft the user deleted or does not
+   want: `log --id <id> --event denied` (back to drafted, it needs a new yes).
+   Drafts still in Gmail count against the daily cap until they are sent or
+   denied.
+6. Never from a scheduled or background task. A schedule may run `due`,
+   `followup --due` and read replies; drafting into Gmail always waits for the
+   user's yes in the chat.
 
 ## Steps
 
@@ -134,8 +152,11 @@ mail-merge tool, no SMTP, no third-party sender.
 2. `closer.py draft --top 20`. Read back what it refused and why. Fix a
    refused personal line from the investor's sources, never by inventing a
    fact, then draft that id again.
-3. Run the Gmail loop above for the batch: batch, the yes, send, log.
-4. Every business day: `closer.py due`. For the ones due, `followup --due`
+3. Run the Gmail loop above for the batch: batch, the yes, Gmail drafts,
+   log; the user sends.
+4. Every business day: first log anything the user sent from Gmail Drafts
+   since last time (step 5 of the loop), then `closer.py due`. For the ones
+   due, `followup --due`
    (an optional `--extra` line for follow-up 1, `--ask` for the last one),
    then the same loop.
 5. Read new replies with `search_threads` / `get_thread` (read only, for
@@ -146,15 +167,31 @@ mail-merge tool, no SMTP, no third-party sender.
    optional: ask first.
 6. A question: draft the answer from `seed/plan.json` and `seed/model.json`
    only (never a number that is not in them), `reply --id ... --body-file`,
-   then the loop. The .eml carries no attachment: link the deck, or the user
-   attaches the PDF in Gmail.
-7. Interested: find two free slots with the user's calendar (read only, for
-   example `suggest_time` or `list_events`) and offer them in a reply. When
-   they agree on a time, `inbox --write` that reply, then `closer.py book`.
-   Show the invite, ask "Send this invite to Maya? Reply yes or no", and after
-   the yes create the event in the user's own calendar with the investor as a
-   guest (Google Calendar `create_event` sends the invite), or attach the .ics
-   to a reply in the thread.
+   then the loop (a Gmail draft in the thread, for the user to send). The
+   .eml carries no attachment: link the deck, or the user attaches the PDF in
+   Gmail before sending.
+7. Interested, with `founder.booking_link` set (the usual way): send the
+   booking link, not proposed times and not a Google Meet or other video
+   link. `closer.py reply --id <id> --booking` (add `--body-file` for a line
+   of your own, or the deck) writes a reply that ends with the link, then the
+   Gmail-draft loop; the user sends it. The investor picks a time and the
+   booking page (Calendly) sends the invite, with its own video link, itself:
+   draft no invite and create no calendar event. To see when they booked,
+   read Calendly (read only: `meetings-list_events` with `invitee_email`,
+   then `meetings-get_event`) and record it with `closer.py book --id <id>
+   --start "<its start>" --tz <its zone> --minutes <its length> --link <its
+   video link> --already-invited`.
+   Interested, with no booking link: ask the user for their booking page
+   once and save it as `founder.booking_link`; only if they have none, find
+   two free slots with the user's calendar (read only, for example
+   `suggest_time` or `list_events`) and offer them in a reply (drafted for the
+   user to send). When they agree on a time, `inbox --write` that reply, then
+   `closer.py book`. Show the invite, ask "Save this invite to
+   Maya as a Gmail draft? You send it yourself. Reply yes or no", and after
+   the yes `create_draft` in her thread with `seed/calls/<id>.ics` attached.
+   **Never add the investor as a guest with Google Calendar `create_event`**:
+   that emails the invite at once. To hold the slot, create the event on the
+   user's own calendar with no guests.
 8. `closer.py status` for the funnel. Hand off: /seed-coach `agenda` for each
    booked call, /seed-updates `--to prospects` for the soft passes, and
    /seed-terms and /seed-dataroom when an investor asks for next steps.
@@ -180,8 +217,9 @@ We're raising a $1.5M seed. Open to a 20-minute call next week?
 Not a fit? Reply 'no' and I won't follow up.
 ```
 
-After the user's "yes", Claude sends the six through Gmail. The reel's 40
-emails would go out over two days at the daily cap of 20. With no reply, `due
+After the user's "yes", Claude saves the six as Gmail drafts and the founder
+reads and sends them from Gmail. The reel's 40 emails would go out over two
+days at the daily cap of 20. With no reply, `due
 --today 2026-10-29` lists follow-up 1 on Thursday, Oct 29 (+3 business days),
 and follow-up 2 would come on Wednesday, Nov 4 (+7 business days; with
 `business_days: false` it is Monday, Nov 2). Maya replied on Oct 30: "What's
@@ -203,8 +241,11 @@ sent 40, replied 12 (30% of sent), interested 5, booked 1.
 
 ## What it never does
 
-- Never sends, and never lets Claude send, without the user's yes for that
-  batch; never "yes to everything from now on"; never from a background task.
+- Never sends an email or an invite, and never lets Claude send one: no
+  `send_message`, no `reply`, no calendar guest. Every email waits in the
+  user's Gmail Drafts for the user to send.
+- Never drafts into Gmail without the user's yes for that batch; never "yes
+  to everything from now on"; never from a background task.
 - Never writes to anyone without a public source in their row, never guesses
   an email address, never collects a personal phone number or home address.
 - Never emails a thread again after a no, an opt-out or a bounce.

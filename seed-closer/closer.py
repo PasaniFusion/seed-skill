@@ -3,15 +3,18 @@
 
 It drafts personal outreach to investors, keeps the pipeline, schedules the
 follow-ups, sorts the replies and writes the calendar invite. It never sends
-an email and never opens an inbox. Claude sends through the USER'S OWN Gmail
-connector, and only after the user said yes to that exact batch.
+an email and never opens an inbox. Draft-only: after the user said yes to
+that exact batch, Claude saves each email as a DRAFT in the USER'S OWN Gmail
+(create_draft, never a send or reply tool). The user reads every draft in
+Gmail and presses send there; nothing leaves the inbox any other way.
 
     python3 closer.py draft --top 20               # one .eml per investor, status "drafted"
     python3 closer.py draft --ids maya-chen --dry-run
     python3 closer.py batch                        # the recipients, the first email in full, the batch id
     python3 closer.py approve --batch 3f9a1c2e --reply "yes"   # the user's reply, word for word
-    python3 closer.py outbox --json                # exactly what Claude sends: to, subject, body, thread
-    python3 closer.py log --id maya-chen --event sent --thread-id 18c2f0a1
+    python3 closer.py outbox --json                # what Claude still has to save to Gmail Drafts
+    python3 closer.py log --id maya-chen --event gmail-draft --gmail-draft-id r-123 --thread-id 18c2f0a1
+    python3 closer.py log --id maya-chen --event sent --date 2026-10-27   # after the user sent it from Gmail
     python3 closer.py due --today 2026-10-29       # who gets a follow-up today
     python3 closer.py followup --due --today 2026-10-29
     python3 closer.py inbox --file replies.json --write
@@ -87,7 +90,8 @@ NEW_STATUS = {"interested": "interested", "question": "replied", "not_now": "pas
               "optout": "optout", "bounce": "bounced", "unclear": "replied"}
 EVENT_CLASS = {"interested": "interested", "question": "question", "replied": "unclear", "notnow": "not_now",
                "passed": "no", "no": "no", "optout": "optout", "bounced": "bounce", "ooo": "ooo"}
-EVENTS = ("sent", "denied", "note") + tuple(EVENT_CLASS)
+EVENTS = ("gmail-draft", "sent", "denied", "note") + tuple(EVENT_CLASS)
+GMAIL_KEYS = ("gmail_draft_id", "gmail_drafted_on", "gmail_thread_id")
 DEFAULT_ASK = "would a 20-minute call next week work?"
 PERSONAL_DOMAINS = ("gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlook.com", "live.com",
                     "icloud.com", "me.com", "aol.com", "proton.me", "protonmail.com")
@@ -255,6 +259,19 @@ def sender_of(cfg):
     return {"name": name, "email": addr, "first": name.split()[0],
             "title": " ".join(str(f.get("title") or "Founder").split()),
             "address": " ".join(str(f.get("company_address") or "").split())}
+
+
+def booking_link_of(cfg):
+    """founder.booking_link: the founder's own booking page (Calendly, cal.com, ...), or None.
+    When it is set, an interested investor gets this link to pick a time; the booking page
+    sends them the invite itself, so no proposed slots and no hand-made video link."""
+    link = str(((cfg or {}).get("founder") or {}).get("booking_link") or "").strip()
+    if not link:
+        return None
+    if not re.match(r"^https://\S+$", link):
+        raise CloserError("seed/config.json founder.booking_link must be a full https:// booking page, like "
+                          "https://calendly.com/your-name/45min (got %r)" % link)
+    return link
 
 
 def money_short(v):
@@ -939,7 +956,8 @@ def cmd_batch(a):
         print("%d more draft%s wait for the next day (the daily cap)." % (len(held), "" if len(held) == 1 else "s"))
     print("Every email is in %s (open any of them before you answer)."
           % os.path.join(a.dir, "outreach"))
-    print("Ask: \"Send these %d email%s from your Gmail? Reply yes or no.\"" % (len(items), "" if len(items) == 1 else "s"))
+    print("Ask: \"Save these %d email%s as drafts in your Gmail? Nothing is sent: you read each one and press send "
+          "yourself. Reply yes or no.\"" % (len(items), "" if len(items) == 1 else "s"))
     print("Then: closer.py approve --batch %s%s --reply \"<the reply, word for word>\"" % (bid, batch_flags(a)))
     return 0
 
@@ -951,7 +969,8 @@ def outbox_row(seed_dir, rec, sender):
         raise CloserError("%s changed after the yes: show it again (batch) before it goes anywhere" % d["file"])
     return {"id": rec["id"], "kind": d["kind"], "touch": d["n"], "to": str(msg["To"]), "to_email": rec["email"],
             "subject": str(msg["Subject"]), "body": body, "thread_id": rec.get("thread_id"),
-            "in_reply_to": d.get("in_reply_to"), "eml": os.path.join(seed_dir, d["file"])}
+            "in_reply_to": d.get("in_reply_to"), "eml": os.path.join(seed_dir, d["file"]),
+            "gmail_draft_id": d.get("gmail_draft_id")}
 
 
 def cmd_approve(a):
@@ -988,11 +1007,16 @@ def cmd_approve(a):
     rows = [outbox_row(a.dir, r, sender) for r in items]
     print("Recorded your yes for batch %s: %d email%s (%d of today's %d cold emails)."
           % (bid, len(items), "" if len(items) == 1 else "s", used + cold, rules["daily_cap"]))
-    print("Now send each one through the user's own Gmail connector, one tool call per email. A follow-up or a "
-          "reply goes into its thread_id. Claude's card asks Allow once or Deny every time:")
+    print("Now save each one as a DRAFT in the user's own Gmail, one tool call per email: create_draft with that "
+          "to, subject and body. Never send_message, never reply (both send at once). A follow-up or a reply is "
+          "drafted inside its thread_id: get_thread, then create_draft with replyToMessageId = its last message:")
     print(json.dumps(rows, indent=2, ensure_ascii=False))
-    print("After each send: closer.py log --id <id> --event sent --thread-id <the Gmail thread id>.")
-    print("If one is denied on the card: closer.py log --id <id> --event denied (it goes back to drafted).")
+    print("After each draft: closer.py log --id <id> --event gmail-draft --gmail-draft-id <draft id> "
+          "--thread-id <its threadId>.")
+    print("Then tell the user they are in Gmail Drafts, to read and send themselves. Once one is in Gmail's Sent: "
+          "closer.py log --id <id> --event sent --date <the day it went>.")
+    print("If a draft is deleted instead, or the user changes their mind: closer.py log --id <id> --event denied "
+          "(back to drafted, it needs a new yes).")
     return 0
 
 
@@ -1000,18 +1024,26 @@ def cmd_outbox(a):
     cfg = load_config(a.dir)
     sender = sender_of(cfg)
     pipe = load_pipe(a.dir)
-    rows = [outbox_row(a.dir, r, sender) for r in pipe["investors"]
-            if (r.get("draft") or {}).get("state") == "approved"]
+    every = [outbox_row(a.dir, r, sender) for r in pipe["investors"]
+             if (r.get("draft") or {}).get("state") == "approved"]
+    rows = [r for r in every if not r["gmail_draft_id"]]
+    parked = [r for r in every if r["gmail_draft_id"]]
     if a.json:
+        # only what still has to be saved to Gmail Drafts, so nothing is drafted twice
         print(json.dumps(rows, indent=2, ensure_ascii=False))
         return 0 if rows else 1
-    if not rows:
-        print("Nothing is approved and waiting to be sent.")
+    if not every:
+        print("Nothing is approved and waiting.")
         return 1
-    print("%d approved email%s, not sent yet:" % (len(rows), "" if len(rows) == 1 else "s"))
-    for r in rows:
-        print("  %-18s %s  %s%s" % (r["id"], r["to"], r["subject"],
-                                    "  (thread %s)" % r["thread_id"] if r["thread_id"] else ""))
+    if rows:
+        print("%d approved email%s to save as Gmail drafts:" % (len(rows), "" if len(rows) == 1 else "s"))
+        for r in rows:
+            print("  %-18s %s  %s%s" % (r["id"], r["to"], r["subject"],
+                                        "  (thread %s)" % r["thread_id"] if r["thread_id"] else ""))
+    if parked:
+        print("%d in Gmail Drafts, waiting for the user to send:" % len(parked))
+        for r in parked:
+            print("  %-18s %s  %s  (draft %s)" % (r["id"], r["to"], r["subject"], r["gmail_draft_id"]))
     return 0
 
 
@@ -1085,6 +1117,21 @@ def cmd_log(a):
             continue
         if st in TERMINAL:
             raise CloserError("%s is %s: that thread ended for good, nothing more is recorded or sent" % (rid, st))
+        if a.event == "gmail-draft":
+            d = rec.get("draft")
+            if not d or d.get("state") != "approved":
+                raise CloserError("%s has no approved email to save as a Gmail draft: the yes comes first (batch, "
+                                  "then approve)" % rid)
+            if not a.gmail_draft_id:
+                raise CloserError("--event gmail-draft needs --gmail-draft-id (the id create_draft returned)")
+            again = d.get("gmail_draft_id")
+            d.update({"gmail_draft_id": a.gmail_draft_id, "gmail_drafted_on": iso(day)})
+            if a.thread_id:
+                d["gmail_thread_id"] = a.thread_id
+            history(rec, day, "gmail draft", "%s%s" % (a.gmail_draft_id, " (replaces %s)" % again if again else ""))
+            out.append("%s: saved in Gmail Drafts (%s). Nothing is sent until the user presses send in Gmail; "
+                       "then log --event sent --date <that day>." % (rid, a.gmail_draft_id))
+            continue
         if a.event == "sent":
             d = rec.get("draft")
             if not d or d.get("state") != "approved":
@@ -1092,11 +1139,14 @@ def cmd_log(a):
                                   % rid)
             if day < parse_day(d["approved_on"], "approved_on"):
                 raise CloserError("%s: the send date %s is before the yes (%s)" % (rid, day, d["approved_on"]))
-            rec["touches"].append({"n": d["n"], "date": iso(day), "kind": d["kind"], "from": "us",
-                                   "subject": d["subject"], "message_id": d["message_id"], "file": d["file"]})
+            touch = {"n": d["n"], "date": iso(day), "kind": d["kind"], "from": "us",
+                     "subject": d["subject"], "message_id": d["message_id"], "file": d["file"]}
+            if d.get("gmail_draft_id"):
+                touch["gmail_draft_id"] = d["gmail_draft_id"]
+            rec["touches"].append(touch)
             rec["draft"] = None
-            if a.thread_id:
-                rec["thread_id"] = a.thread_id
+            if a.thread_id or d.get("gmail_thread_id"):
+                rec["thread_id"] = a.thread_id or d["gmail_thread_id"]
             if d["kind"] == "intro":
                 set_status(rec, "sent")
             rec["next_due"] = iso(next_due(rec, rules))
@@ -1109,12 +1159,14 @@ def cmd_log(a):
             if not d or d.get("state") != "approved":
                 raise CloserError("%s has no approved email to put back" % rid)
             d["state"] = "drafted"
-            for k in ("approved_on", "reply", "batch", "sha"):
+            stale = d.get("gmail_draft_id")
+            for k in ("approved_on", "reply", "batch", "sha") + GMAIL_KEYS:
                 d.pop(k, None)
             if d["kind"] == "intro":
                 set_status(rec, "drafted")
             history(rec, day, "denied", d["file"])
-            out.append("%s: back to drafted. It needs a new yes before it goes anywhere." % rid)
+            out.append("%s: back to drafted. It needs a new yes before it goes anywhere.%s"
+                       % (rid, " Delete Gmail draft %s too if it is still there." % stale if stale else ""))
         else:
             out.append(record_reply(rec, EVENT_CLASS[a.event], day, rules, note=a.note or ""))
     save_pipe(a.dir, pipe, today)
@@ -1269,7 +1321,8 @@ def cmd_followup(a):
     print("")
     for line in body.split("\n"):
         print(("  " + line).rstrip())
-    print("Nothing is sent. Next: closer.py batch, then the user's yes. Send it in the intro's thread%s."
+    print("Nothing is sent. Next: closer.py batch, then the user's yes, then a Gmail draft in the intro's thread%s "
+          "for the user to send."
           % (" (%s)" % rec["thread_id"] if rec.get("thread_id") else ""))
     return 0
 
@@ -1293,6 +1346,13 @@ def cmd_reply(a):
     else:
         text = a.body or ""
     text = tidy(text.replace("\r\n", "\n"))
+    if a.booking:
+        link = booking_link_of(cfg)
+        if not link:
+            raise CloserError("--booking needs founder.booking_link in seed/config.json (your booking page, like "
+                              "https://calendly.com/your-name/45min)")
+        text = (text or "Thanks, great to hear.") + ("\n\nGrab a time that suits you here, and the invite with the "
+                                                     "video link comes straight to you: %s" % link)
     if not text:
         raise CloserError("the reply is empty: give --body or --body-file")
     if PLACEHOLDER_RE.search(text):
@@ -1315,7 +1375,8 @@ def cmd_reply(a):
     print("Drafted a reply to %s -> %s" % (rec["name"], os.path.join(a.dir, rel)))
     for line in body.split("\n"):
         print(("  " + line).rstrip())
-    print("Nothing is sent. Next: closer.py batch, then the user's yes; it goes into the same thread.")
+    print("Nothing is sent. Next: closer.py batch, then the user's yes, then a Gmail draft in the same thread for "
+          "the user to send.")
     return 0
 
 
@@ -1466,8 +1527,16 @@ def classify(text, subject="", sender="", today=None):
     return {"class": "unclear", "why": "no rule matched", "back": None, "deck": deck}
 
 
-def next_action(cls, info, rec_id):
+def next_action(cls, info, rec_id, booking=None):
     rid = rec_id or "<id>"
+    if cls == "interested" and booking:
+        s = ("Send the booking link, not times or a video link: closer.py reply --id %s --booking (it adds %s), "
+             "then the Gmail-draft loop. The booking page sends the invite when they pick a time; then record it: "
+             "closer.py book --id %s --start ... --tz ... --minutes ... --link <its video link> --already-invited."
+             % (rid, booking, rid))
+        if info.get("deck"):
+            s += " They asked for the deck: put it in the same reply (--body-file), after the yes."
+        return s
     if cls == "interested":
         s = ("Offer two times from the user's calendar (or ask what suits them). When they agree on one: closer.py "
              "book --id %s --start \"YYYY-MM-DD HH:MM\" --tz ... --link <video link>." % rid)
@@ -1534,6 +1603,7 @@ def cmd_inbox(a):
     today = get_today(a)
     cfg = load_config(a.dir) if a.write else (read_json(os.path.join(a.dir, "config.json"), "config", False) or {})
     rules = outreach_rules(cfg)
+    booking = booking_link_of(cfg)
     pipe = load_pipe(a.dir)
     rows = load_replies(a)
     if not rows:
@@ -1546,7 +1616,7 @@ def cmd_inbox(a):
         body = " ".join(strip_quoted(str(r.get("text", ""))).split())
         res = {"id": rec["id"] if rec else None, "name": rec["name"] if rec else (r.get("from") or "unknown sender"),
                "class": cls, "label": LABELS[cls], "why": info["why"],
-               "back": iso(info["back"]), "excerpt": body[:160], "next": next_action(cls, info, rec["id"] if rec else None)}
+               "back": iso(info["back"]), "excerpt": body[:160], "next": next_action(cls, info, rec["id"] if rec else None, booking)}
         if a.write and rec:
             day = parse_day(r["date"], "reply date") if r.get("date") else today
             res["recorded"] = record_reply(rec, cls, day, rules, note=info["why"], back=info["back"], excerpt=body)
@@ -1795,9 +1865,16 @@ def cmd_book(a):
     print("  %s to %s UTC. Wrote %s (UID %s, sequence %d)." % (utc_stamp(start), utc_stamp(end), path, uid, seq))
     if local.weekday() >= 5:
         print("  note: that is a %s." % DAY_NAMES[local.weekday()])
-    print("Nothing was sent. Show the invite and ask: \"Send this invite to %s? Reply yes or no.\"" % rec["name"])
-    print("After the yes: create the event in the user's own calendar with %s as a guest (the Google Calendar "
-          "connector sends the invite), or attach %s to a reply in the thread." % (rec["email"], rel))
+    if a.already_invited:
+        print("Recorded only: the booking page already sent %s the invite, so there is nothing to draft or send. "
+              "%s stays on file." % (rec["name"], path))
+        print("Then prepare the call: seed-coach agenda for %s." % rec["id"])
+        return 0
+    print("Nothing was sent. Show the invite and ask: \"Save this invite to %s as a Gmail draft? You send it "
+          "yourself. Reply yes or no.\"" % rec["name"])
+    print("After the yes: create_draft in the thread (replyToMessageId = its last message) with %s attached. "
+          "Never add %s as a guest with create_event: that emails the invite at once. To hold the slot, create the "
+          "event on the user's own calendar with no guests." % (rel, rec["email"]))
     print("Then prepare the call: seed-coach agenda for %s." % rec["id"])
     return 0
 
@@ -1840,13 +1917,15 @@ def cmd_status(a):
         by[r.get("status")] = by.get(r.get("status"), 0) + 1
     waiting = sum(1 for r in recs if (r.get("draft") or {}).get("state") == "drafted")
     approved = sum(1 for r in recs if (r.get("draft") or {}).get("state") == "approved")
+    in_gmail = sum(1 for r in recs if (r.get("draft") or {}).get("gmail_draft_id"))
     due = sum(1 for r in recs if not r.get("draft") and next_due(r, rules) and next_due(r, rules) <= today)
     calls = [r for r in recs if r.get("status") == "booked" and r.get("call")]
     rate = (100.0 * f["replied"] / f["sent"]) if f["sent"] else 0.0
     if a.json:
         print(json.dumps({"date": today.isoformat(), "funnel": f, "reply_rate_pct": round(rate, 1),
                           "by_status": {str(k): v for k, v in sorted(by.items(), key=lambda x: str(x[0]))},
-                          "waiting_for_yes": waiting, "approved_not_sent": approved, "followups_due": due,
+                          "waiting_for_yes": waiting, "approved_not_sent": approved, "in_gmail_drafts": in_gmail,
+                          "followups_due": due,
                           "calls": [dict(r["call"], id=r["id"], name=r["name"], firm=r["firm"]) for r in calls]},
                          indent=2, ensure_ascii=False))
         return 0
@@ -1860,7 +1939,8 @@ def cmd_status(a):
         soft = sum(1 for r in recs if r.get("status") == "passed" and "Not now" in (r.get("labels") or []))
         print("  stopped: %s" % ", ".join("%d %s%s" % (n, s, " (%d not now)" % soft if s == "passed" and soft else "")
                                           for s, n in stopped))
-    print("  waiting for a yes: %d   approved, not sent: %d   follow-ups due today: %d" % (waiting, approved, due))
+    print("  waiting for a yes: %d   approved, not sent: %d (%d in Gmail Drafts)   follow-ups due today: %d"
+          % (waiting, approved, in_gmail, due))
     for r in calls:
         print("  call: %s (%s) %s %s" % (r["name"], r["firm"], r["call"]["local"], r["call"]["tz"]))
     return 0
@@ -1895,13 +1975,15 @@ def main(argv=None):
         else:
             p.add_argument("--batch", required=True, help="the batch id that batch printed")
             p.add_argument("--reply", required=True, help="the user's reply, word for word")
-    p = base(sub.add_parser("outbox", help="the approved emails, exactly as Claude sends them"), today=False)
-    p.add_argument("--json", action="store_true")
-    p = base(sub.add_parser("log", help="record sent / denied / a reply / a note"))
+    p = base(sub.add_parser("outbox", help="the approved emails, exactly as Claude saves them to Gmail Drafts"),
+             today=False)
+    p.add_argument("--json", action="store_true", help="only the ones not yet in Gmail Drafts")
+    p = base(sub.add_parser("log", help="record gmail-draft / sent / denied / a reply / a note"))
     p.add_argument("--id", required=True, help="an id, or several comma separated")
     p.add_argument("--event", required=True, choices=EVENTS)
-    p.add_argument("--date", help="YYYY-MM-DD (default --today)")
+    p.add_argument("--date", help="YYYY-MM-DD (default --today); for sent, the day the user sent it from Gmail")
     p.add_argument("--thread-id")
+    p.add_argument("--gmail-draft-id", help="for gmail-draft: the draft id create_draft returned")
     p.add_argument("--note")
     p = base(sub.add_parser("due", help="who gets a follow-up today"))
     p.add_argument("--json", action="store_true")
@@ -1915,6 +1997,8 @@ def main(argv=None):
     p.add_argument("--id", required=True)
     p.add_argument("--body")
     p.add_argument("--body-file")
+    p.add_argument("--booking", action="store_true",
+                   help="end the reply with founder.booking_link so they pick a time (Calendly sends the invite)")
     p = base(sub.add_parser("inbox", help="sort pasted replies by rules, and record them with --write"))
     p.add_argument("--file")
     p.add_argument("--text")
@@ -1933,6 +2017,8 @@ def main(argv=None):
     p.add_argument("--link")
     p.add_argument("--location")
     p.add_argument("--title")
+    p.add_argument("--already-invited", action="store_true",
+                   help="they booked through founder.booking_link, which sent the invite: record the call only")
     p.add_argument("--stamp", help="DTSTAMP in UTC, like 2026-11-02T15:04:00Z (default: now)")
     p = base(sub.add_parser("status", help="the funnel"))
     p.add_argument("--id")

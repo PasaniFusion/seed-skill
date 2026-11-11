@@ -18,9 +18,10 @@ to every investor on your list, keeps track of every conversation, sorts the
 replies, and follows up until an investor call is booked, with the calendar
 invite ready to send. So all you have to do is show up.
 
-**Nothing leaves your inbox until you say yes.** The Closer drafts. Claude
-sends through your own Gmail connector only after you approve the batch, with
-a daily cap, an opt-out line in every email, and a thread that stops for good
+**Nothing leaves your inbox until you press send.** The Closer drafts. After
+you approve a batch, Claude saves each email to your own Gmail Drafts (never a
+send tool); you read it, edit it if you like, and send it yourself. With a
+daily cap, an opt-out line in every email, and a thread that stops for good
 on a "no".
 
 ## Install
@@ -59,8 +60,10 @@ finder's SEC search asks you to identify yourself, as the SEC requires: put
 your name and email in `seed/config.json` (`"sec_user_agent": "Your Name
 you@example.com"`) or in the `SEC_USER_AGENT` environment variable.
 
-To send email and book calls, connect Gmail and Google Calendar in Claude
-(Customize, Connectors) and set their send tools to "Needs approval".
+To draft email and book calls, connect Gmail and Google Calendar in Claude
+(Customize, Connectors) and set their send tools to "Needs approval". The
+skills only ever use Gmail's draft tool; the send tools stay on approval as a
+backstop.
 
 ## The eleven
 
@@ -70,7 +73,7 @@ To send email and book calls, connect Gmail and Google Calendar in Claude
 | `/seed-investors` | Investor Finder | Researches the best investors for your idea from public sources and SEC Form D filings, then ranks them by fit with the reasons and the links. |
 | `/seed-plan` | Business Planner | Turns your idea into a business plan: the nine sections, with the unit economics worked out and every number cross-checked. |
 | `/seed-deck` | Pitch Deck Designer | Turns the plan into a 10-slide pitch deck, one self-contained file you can present or print to PDF. |
-| `/seed-closer` | The Closer | Sends personalised outreach to investors (only after your yes), manages the conversations, follows up and books the call. |
+| `/seed-closer` | The Closer | Drafts personalised outreach to investors into your Gmail Drafts (only after your yes; you press send), manages the conversations, follows up and books the call. |
 | `/seed-market` | Market Sizer | Sizes your market top-down and bottom-up, TAM, SAM and SOM, with a source on every input. |
 | `/seed-model` | Financial Modeler | Builds the 36-month model: revenue, burn, runway, the month you break even and where the money goes. |
 | `/seed-coach` | Pitch Coach | Drills you on the hard questions this investor will ask, tailored to your numbers and your competitors. |
@@ -132,11 +135,13 @@ competitors and the market numbers are real.
 arithmetic. Investors decide whether to invest, based on your business. A
 better deck and a faster follow-up help; they do not guarantee a check.
 
-**Nothing sends without your yes.** Only `/seed-closer` can lead to an email,
-and only after you approve that batch in the chat. Set your Gmail connector's
-send tool to "Needs approval" (Customize, Connectors, tool permissions), never
-"Always allow", so Claude's own "Allow once / Deny" card is a second check.
-Every email carries your real name and an opt-out line. A "no", an opt-out or
+**Nothing sends but you.** Only `/seed-closer` and `/seed-updates` can lead
+to an email, and only as a Gmail draft after you approve that batch in the
+chat. Claude never calls a send or reply tool and never adds an investor as
+a calendar guest (that would email the invite); you send every email and
+invite from Gmail yourself. Keep your Gmail connector's send tools on "Needs
+approval" (Customize, Connectors, tool permissions), never "Always allow", as
+a backstop. Every email carries your real name and an opt-out line. A "no", an opt-out or
 a bounce ends that thread for good. Default cap: 20 new emails a day.
 
 **Public sources only.** The investor finder reads public pages (a firm's own

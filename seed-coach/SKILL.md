@@ -80,8 +80,9 @@ agenda, `--seed N` to shuffle within each category the same way every time.
    (`/seed-model`, `/seed-market`), not in the answer.
 4. When `/seed-closer` books a call, run `coach.py agenda --investor ID
    --write` and `drill --investor ID`, and walk through both the day before.
-5. After the call, hand back to `/seed-closer` to log it and send the
-   follow-up, and to `/seed-dataroom` if they ask for documents.
+5. After the call, hand back to `/seed-closer` to log it and draft the
+   follow-up into Gmail Drafts for the founder to send, and to
+   `/seed-dataroom` if they ask for documents.
 
 ## Example: the reel
 
